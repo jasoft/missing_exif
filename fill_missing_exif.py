@@ -51,19 +51,17 @@ VIDEO_EXTENSIONS = {
     ".wmv",
 }
 
-IMAGE_TIME_TAGS = (
-    "EXIF:DateTimeOriginal",
-    "EXIF:CreateDate",
-    "XMP:DateTimeOriginal",
-    "XMP:CreateDate",
+IMAGE_METADATA_TAGS = (
+    "EXIF:all",
+    "XMP:all",
+    "IPTC:all",
 )
 
-VIDEO_TIME_TAGS = (
-    "QuickTime:CreateDate",
-    "QuickTime:MediaCreateDate",
-    "QuickTime:TrackCreateDate",
-    "Keys:CreationDate",
-    "XMP:CreateDate",
+VIDEO_METADATA_TAGS = (
+    "QuickTime:all",
+    "Keys:all",
+    "XMP:all",
+    "EXIF:all",
 )
 
 
@@ -232,38 +230,69 @@ def read_selected_tags(file_path: Path, tags: Sequence[str]) -> dict[str, str]:
     return {str(key): str(value) for key, value in row.items()}
 
 
-def has_capture_time(file_path: Path, media_kind: MediaKind) -> bool:
-    """判断文件是否已存在拍摄时间相关标签。
+def has_existing_metadata(file_path: Path, media_kind: MediaKind) -> bool:
+    """判断文件是否已存在媒体元数据。
 
     Args:
         file_path: 文件路径。
         media_kind: 媒体类型（image/video）。
 
     Returns:
-        bool: 若存在任意目标拍摄时间标签则返回 True。
+        bool: 若存在任意 EXIF/XMP/QuickTime/Keys/IPTC 标签则返回 True。
     """
-    tags = IMAGE_TIME_TAGS if media_kind == "image" else VIDEO_TIME_TAGS
+    tags = IMAGE_METADATA_TAGS if media_kind == "image" else VIDEO_METADATA_TAGS
     metadata = read_selected_tags(file_path, tags)
-    for tag in tags:
-        value = metadata.get(tag)
-        if value and value.strip():
-            return True
+    for key, value in metadata.items():
+        if key == "SourceFile":
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        if value is None:
+            continue
+        return True
     return False
 
 
-def format_exif_time(file_path: Path) -> tuple[str, str]:
-    """将文件最后修改时间格式化为元数据写入格式。
+def should_report_scan_progress(
+    index: int, total_files: int, effective_interval: int
+) -> bool:
+    """判断是否应输出扫描进度。
 
     Args:
-        file_path: 文件路径。
+        index: 当前处理序号（从 1 开始）。
+        total_files: 媒体总数。
+        effective_interval: 有效进度间隔。
 
     Returns:
-        tuple[str, str]: `EXIF` 时间格式和带时区的 `ISO 8601` 时间格式。
+        bool: True 表示应输出进度信息。
     """
-    modified_at = datetime.fromtimestamp(file_path.stat().st_mtime).astimezone()
-    exif_time = modified_at.strftime("%Y:%m:%d %H:%M:%S")
-    iso_time = modified_at.isoformat(timespec="seconds")
-    return exif_time, iso_time
+    return index == 1 or index == total_files or index % effective_interval == 0
+
+
+def print_scan_progress(
+    index: int,
+    total_files: int,
+    file_path: Path,
+    target_dir: Path,
+    pending_count: int,
+) -> None:
+    """输出扫描进度信息。
+
+    Args:
+        index: 当前处理序号（从 1 开始）。
+        total_files: 媒体总数。
+        file_path: 当前处理文件路径。
+        target_dir: 扫描根目录。
+        pending_count: 当前待修改数量。
+    """
+    percent = (index / total_files) * 100
+    current_file = safe_relative_path(file_path, target_dir)
+    print(
+        "[扫描进度] "
+        f"{index}/{total_files} ({percent:.1f}%) | "
+        f"当前: {current_file} | 待修改: {pending_count}",
+        flush=True,
+    )
 
 
 def build_modification_plan(
@@ -280,33 +309,29 @@ def build_modification_plan(
         list[PlanItem]: 待处理清单，每项为：
             (文件路径, 媒体类型, exif_time, iso_time, 备份路径)。
     """
-    plan: list[PlanItem] = []
+    print("跳过规则: 文件存在 EXIF/XMP/QuickTime/Keys/IPTC 元数据即跳过。")
     media_files = iter_media_files(target_dir, backup_dir)
     total_files = len(media_files)
     print(f"扫描到媒体文件总数: {total_files}", flush=True)
 
+    plan: list[PlanItem] = []
     if total_files == 0:
         return plan
 
     effective_interval = max(progress_interval, 1)
     for index, (file_path, media_kind) in enumerate(media_files, start=1):
-        should_report_progress = (
-            index == 1
-            or index == total_files
-            or index % effective_interval == 0
-        )
-        if should_report_progress:
-            percent = (index / total_files) * 100
-            current_file = safe_relative_path(file_path, target_dir)
-            print(
-                "[扫描进度] "
-                f"{index}/{total_files} ({percent:.1f}%) | "
-                f"当前: {current_file} | 待修改: {len(plan)}",
-                flush=True,
+        if should_report_scan_progress(index, total_files, effective_interval):
+            print_scan_progress(
+                index=index,
+                total_files=total_files,
+                file_path=file_path,
+                target_dir=target_dir,
+                pending_count=len(plan),
             )
 
-        if has_capture_time(file_path, media_kind):
+        if has_existing_metadata(file_path, media_kind):
             continue
+
         exif_time, iso_time = format_exif_time(file_path)
         relative_path = file_path.relative_to(target_dir)
         backup_path = backup_dir / relative_path
@@ -314,6 +339,19 @@ def build_modification_plan(
     return plan
 
 
+def format_exif_time(file_path: Path) -> tuple[str, str]:
+    """将文件最后修改时间格式化为元数据写入格式。
+
+    Args:
+        file_path: 文件路径。
+
+    Returns:
+        tuple[str, str]: `EXIF` 时间格式和带时区的 `ISO 8601` 时间格式。
+    """
+    modified_at = datetime.fromtimestamp(file_path.stat().st_mtime).astimezone()
+    exif_time = modified_at.strftime("%Y:%m:%d %H:%M:%S")
+    iso_time = modified_at.isoformat(timespec="seconds")
+    return exif_time, iso_time
 def print_plan(plan: Sequence[PlanItem], target_dir: Path) -> None:
     """输出待修改文件清单。
 
