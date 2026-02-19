@@ -49,6 +49,48 @@ docker run --rm -it \
   /data --backup-dir /backup -y --progress-interval 20
 ```
 
+### 4. 后台运行（长任务推荐）
+
+`nohup` 或后台任务环境没有 TTY，不能使用 `-it`。  
+后台运行时请去掉 `-it`，并加 `-y` 避免交互确认阻塞。
+
+使用 `nohup`：
+
+```bash
+nohup docker run --rm \
+  -e TZ=Asia/Shanghai \
+  -v /volume1/photo:/data \
+  -v /volume1/photo_backup:/backup \
+  missing-exif:latest \
+  /data --backup-dir /backup --progress-interval 20 -y \
+  --exclude-dir "#recycle,.thumb" \
+  > /volume1/photo_backup/missing-exif.log 2>&1 &
+```
+
+查看日志：
+
+```bash
+tail -f /volume1/photo_backup/missing-exif.log
+```
+
+使用 Docker detached 模式（推荐）：
+
+```bash
+docker run -d --name missing-exif-job \
+  -e TZ=Asia/Shanghai \
+  -v /volume1/photo:/data \
+  -v /volume1/photo_backup:/backup \
+  missing-exif:latest \
+  /data --backup-dir /backup --progress-interval 20 -y \
+  --exclude-dir "#recycle,.thumb"
+```
+
+查看任务日志：
+
+```bash
+docker logs -f missing-exif-job
+```
+
 ## 参数说明
 
 - `target_dir`：要扫描的目录（容器内路径，例如 `/data`）
