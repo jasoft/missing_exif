@@ -22,7 +22,8 @@ docker run --rm -it \
   -v /volume1/photo:/data \
   -v /volume1/photo_backup:/backup \
   missing-exif:latest \
-  /data --dry-run --backup-dir /backup --progress-interval 20
+  /data --dry-run --backup-dir /backup --progress-interval 20 \
+  --exclude-dir "#recycle" --exclude-dir ".thumb"
 ```
 
 ### 3. 正式执行（写入元数据）
@@ -33,7 +34,8 @@ docker run --rm -it \
   -v /volume1/photo:/data \
   -v /volume1/photo_backup:/backup \
   missing-exif:latest \
-  /data --backup-dir /backup --progress-interval 20
+  /data --backup-dir /backup --progress-interval 20 \
+  --exclude-dir "#recycle,.thumb"
 ```
 
 如果你不想交互确认，可加 `-y`：
@@ -53,4 +55,5 @@ docker run --rm -it \
 - `--dry-run`：只显示将被修改的文件，不执行写入
 - `--backup-dir`：备份目录，建议映射到独立卷（例如 `/backup`）
 - `--progress-interval`：扫描阶段进度输出间隔（默认每 50 个媒体文件输出一次）
+- `--exclude-dir`：按目录名排除扫描，支持重复传入和逗号分隔
 - `-y` / `--yes`：跳过交互确认，直接执行写入

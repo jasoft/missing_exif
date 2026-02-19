@@ -101,6 +101,16 @@ def parse_args() -> argparse.Namespace:
         default=50,
         help="扫描阶段每处理多少个媒体文件输出一次进度，默认 50。",
     )
+    parser.add_argument(
+        "--exclude-dir",
+        action="append",
+        default=[],
+        metavar="DIR_NAME",
+        help=(
+            "按目录名排除扫描。可重复传入，也支持逗号分隔，例如 "
+            '--exclude-dir "#recycle" --exclude-dir .thumb'
+        ),
+    )
     return parser.parse_args()
 
 
@@ -161,6 +171,47 @@ def resolve_backup_dir(target_dir: Path, backup_dir: Path) -> Path:
     return target_dir / backup_dir
 
 
+def normalize_excluded_dir_names(raw_values: Sequence[str]) -> set[str]:
+    """规范化目录排除规则。
+
+    Args:
+        raw_values: 用户输入的目录名，支持重复和逗号分隔。
+
+    Returns:
+        set[str]: 去重且小写化后的目录名集合。
+    """
+    names: set[str] = set()
+    for raw in raw_values:
+        for item in raw.split(","):
+            normalized = item.strip().lower()
+            if normalized:
+                names.add(normalized)
+    return names
+
+
+def is_file_in_excluded_dirs(
+    file_path: Path, target_dir: Path, excluded_dir_names: set[str]
+) -> bool:
+    """判断文件是否位于被排除目录中。
+
+    Args:
+        file_path: 文件路径。
+        target_dir: 扫描根目录。
+        excluded_dir_names: 被排除目录名集合（小写）。
+
+    Returns:
+        bool: 若文件位于被排除目录中则返回 True。
+    """
+    if not excluded_dir_names:
+        return False
+
+    relative_parts = file_path.relative_to(target_dir).parts
+    for part in relative_parts[:-1]:
+        if part.lower() in excluded_dir_names:
+            return True
+    return False
+
+
 def detect_media_kind(file_path: Path) -> MediaKind | None:
     """根据扩展名识别媒体类型。
 
@@ -178,12 +229,17 @@ def detect_media_kind(file_path: Path) -> MediaKind | None:
     return None
 
 
-def iter_media_files(target_dir: Path, backup_dir: Path) -> list[tuple[Path, MediaKind]]:
+def iter_media_files(
+    target_dir: Path,
+    backup_dir: Path,
+    excluded_dir_names: set[str],
+) -> list[tuple[Path, MediaKind]]:
     """递归收集目标目录中的媒体文件。
 
     Args:
         target_dir: 扫描根目录。
         backup_dir: 备份目录（用于避免扫描备份文件）。
+        excluded_dir_names: 被排除目录名集合。
 
     Returns:
         list[tuple[Path, MediaKind]]: 媒体文件与类型列表。
@@ -193,6 +249,8 @@ def iter_media_files(target_dir: Path, backup_dir: Path) -> list[tuple[Path, Med
         if not file_path.is_file():
             continue
         if backup_dir in file_path.parents:
+            continue
+        if is_file_in_excluded_dirs(file_path, target_dir, excluded_dir_names):
             continue
         media_kind = detect_media_kind(file_path)
         if media_kind is None:
@@ -296,7 +354,10 @@ def print_scan_progress(
 
 
 def build_modification_plan(
-    target_dir: Path, backup_dir: Path, progress_interval: int
+    target_dir: Path,
+    backup_dir: Path,
+    progress_interval: int,
+    excluded_dir_names: set[str],
 ) -> list[PlanItem]:
     """构建需要修改的文件清单。
 
@@ -304,13 +365,18 @@ def build_modification_plan(
         target_dir: 扫描根目录。
         backup_dir: 备份目录。
         progress_interval: 扫描进度输出间隔（媒体文件数量）。
+        excluded_dir_names: 被排除目录名集合。
 
     Returns:
         list[PlanItem]: 待处理清单，每项为：
             (文件路径, 媒体类型, exif_time, iso_time, 备份路径)。
     """
     print("跳过规则: 文件存在 EXIF/XMP/QuickTime/Keys/IPTC 元数据即跳过。")
-    media_files = iter_media_files(target_dir, backup_dir)
+    if excluded_dir_names:
+        names_text = ", ".join(sorted(excluded_dir_names))
+        print(f"目录排除: {names_text}")
+
+    media_files = iter_media_files(target_dir, backup_dir, excluded_dir_names)
     total_files = len(media_files)
     print(f"扫描到媒体文件总数: {total_files}", flush=True)
 
@@ -514,6 +580,7 @@ def main() -> int:
     args = parse_args()
     target_dir = args.target_dir.resolve()
     backup_dir = resolve_backup_dir(target_dir, args.backup_dir).resolve()
+    excluded_dir_names = normalize_excluded_dir_names(args.exclude_dir)
 
     if not target_dir.exists() or not target_dir.is_dir():
         print(f"目标目录不存在或不是目录: {target_dir}", file=sys.stderr)
@@ -523,7 +590,10 @@ def main() -> int:
         ensure_exiftool_available()
         print(f"开始扫描目录: {target_dir}", flush=True)
         plan = build_modification_plan(
-            target_dir, backup_dir, args.progress_interval
+            target_dir,
+            backup_dir,
+            args.progress_interval,
+            excluded_dir_names,
         )
     except Exception as exc:  # noqa: BLE001
         print(f"初始化失败: {exc}", file=sys.stderr)
