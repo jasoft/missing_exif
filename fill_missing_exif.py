@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -205,11 +206,104 @@ def is_file_in_excluded_dirs(
     if not excluded_dir_names:
         return False
 
-    relative_parts = file_path.relative_to(target_dir).parts
+    try:
+        relative_parts = file_path.relative_to(target_dir).parts
+    except ValueError:
+        return False
+
     for part in relative_parts[:-1]:
         if part.lower() in excluded_dir_names:
             return True
     return False
+
+
+def is_path_under_base(path: Path, base_dir: Path) -> bool:
+    """判断路径是否位于给定目录下。
+
+    Args:
+        path: 待判断路径。
+        base_dir: 基准目录。
+
+    Returns:
+        bool: 若路径位于基准目录下则返回 True。
+    """
+    try:
+        path.relative_to(base_dir)
+    except ValueError:
+        return False
+    return True
+
+
+def safe_resolve_path(path: Path) -> Path:
+    """安全解析路径，失败时返回原路径。
+
+    Args:
+        path: 待解析路径。
+
+    Returns:
+        Path: 解析后的路径或原路径。
+    """
+    try:
+        return path.resolve()
+    except OSError:
+        return path
+
+
+def should_skip_walk_directory(
+    directory_path: Path,
+    backup_dir: Path,
+    excluded_dir_names: set[str],
+    visited_real_dirs: set[str],
+) -> bool:
+    """判断目录是否应在遍历时跳过。
+
+    Args:
+        directory_path: 目录路径。
+        backup_dir: 备份目录。
+        excluded_dir_names: 被排除目录名集合。
+        visited_real_dirs: 已访问目录真实路径集合。
+
+    Returns:
+        bool: True 表示应跳过该目录。
+    """
+    if directory_path.name.lower() in excluded_dir_names:
+        return True
+
+    if is_path_under_base(directory_path, backup_dir):
+        return True
+
+    real_directory = safe_resolve_path(directory_path)
+    if is_path_under_base(real_directory, backup_dir):
+        return True
+
+    return str(real_directory) in visited_real_dirs
+
+
+def should_skip_media_file(
+    file_path: Path,
+    target_dir: Path,
+    backup_dir: Path,
+    excluded_dir_names: set[str],
+) -> bool:
+    """判断媒体文件是否应跳过。
+
+    Args:
+        file_path: 文件路径。
+        target_dir: 扫描根目录。
+        backup_dir: 备份目录。
+        excluded_dir_names: 被排除目录名集合。
+
+    Returns:
+        bool: True 表示应跳过该文件。
+    """
+    if is_path_under_base(file_path, backup_dir):
+        return True
+
+    resolved_file_path = safe_resolve_path(file_path)
+    if is_path_under_base(resolved_file_path, backup_dir):
+        return True
+
+    return is_file_in_excluded_dirs(file_path, target_dir, excluded_dir_names)
 
 
 def detect_media_kind(file_path: Path) -> MediaKind | None:
@@ -245,17 +339,44 @@ def iter_media_files(
         list[tuple[Path, MediaKind]]: 媒体文件与类型列表。
     """
     media_files: list[tuple[Path, MediaKind]] = []
-    for file_path in target_dir.rglob("*"):
-        if not file_path.is_file():
+    visited_real_dirs: set[str] = set()
+
+    for root_dir, dir_names, file_names in os.walk(target_dir, followlinks=True):
+        root_path = Path(root_dir)
+        root_real_path = safe_resolve_path(root_path)
+        root_real_key = str(root_real_path)
+        if root_real_key in visited_real_dirs:
+            dir_names[:] = []
             continue
-        if backup_dir in file_path.parents:
-            continue
-        if is_file_in_excluded_dirs(file_path, target_dir, excluded_dir_names):
-            continue
-        media_kind = detect_media_kind(file_path)
-        if media_kind is None:
-            continue
-        media_files.append((file_path, media_kind))
+        visited_real_dirs.add(root_real_key)
+
+        filtered_dir_names: list[str] = []
+        for dir_name in dir_names:
+            child_dir_path = root_path / dir_name
+            if should_skip_walk_directory(
+                directory_path=child_dir_path,
+                backup_dir=backup_dir,
+                excluded_dir_names=excluded_dir_names,
+                visited_real_dirs=visited_real_dirs,
+            ):
+                continue
+            filtered_dir_names.append(dir_name)
+        dir_names[:] = filtered_dir_names
+
+        for file_name in file_names:
+            file_path = root_path / file_name
+            if should_skip_media_file(
+                file_path=file_path,
+                target_dir=target_dir,
+                backup_dir=backup_dir,
+                excluded_dir_names=excluded_dir_names,
+            ):
+                continue
+
+            media_kind = detect_media_kind(file_path)
+            if media_kind is None:
+                continue
+            media_files.append((file_path, media_kind))
     return media_files
 
 
