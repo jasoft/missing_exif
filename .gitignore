@@ -1,0 +1,6 @@
+.ruff_cache/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+__exif_backups/

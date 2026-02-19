@@ -1,0 +1,7 @@
+.git
+.ruff_cache
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.log
