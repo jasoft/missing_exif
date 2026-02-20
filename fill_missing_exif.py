@@ -31,8 +31,6 @@ ScanResult = tuple[Path, PlanItem | None, str | None]
 DEFAULT_SCAN_WORKERS = max(4, min(32, (os.cpu_count() or 4) * 2))
 DEFAULT_PLAN_FLUSH_INTERVAL = 200
 STATE_DIR_NAME = ".missing_exif_state"
-DISCOVERY_FILE_PROGRESS_INTERVAL = 1000
-DISCOVERY_DIR_PROGRESS_INTERVAL = 300
 
 IMAGE_EXTENSIONS = {
     ".avif",
@@ -779,31 +777,6 @@ def should_skip_media_file(
     return is_file_in_excluded_dirs(file_path, target_dir, excluded_dir_names)
 
 
-def should_report_discovery_progress(
-    visited_dir_count: int,
-    inspected_file_count: int,
-) -> bool:
-    """判断是否应输出预扫描进度。
-
-    Args:
-        visited_dir_count: 已遍历目录数。
-        inspected_file_count: 已检查文件数。
-
-    Returns:
-        bool: True 表示应输出进度。
-    """
-    if visited_dir_count == 1:
-        return True
-
-    if visited_dir_count % DISCOVERY_DIR_PROGRESS_INTERVAL == 0:
-        return True
-
-    if inspected_file_count % DISCOVERY_FILE_PROGRESS_INTERVAL == 0:
-        return True
-
-    return False
-
-
 def print_discovery_progress(
     visited_dir_count: int,
     inspected_file_count: int,
@@ -878,17 +851,13 @@ def iter_media_files(
             continue
         visited_real_dirs.add(root_real_key)
 
-        if should_report_discovery_progress(
+        print_discovery_progress(
             visited_dir_count=visited_dir_count,
             inspected_file_count=inspected_file_count,
-        ):
-            print_discovery_progress(
-                visited_dir_count=visited_dir_count,
-                inspected_file_count=inspected_file_count,
-                media_candidate_count=len(media_files),
-                current_dir=root_path,
-                target_dir=target_dir,
-            )
+            current_dir=root_path,
+            target_dir=target_dir,
+            media_candidate_count=len(media_files),
+        )
 
         filtered_dir_names: list[str] = []
         for dir_name in dir_names:
@@ -918,18 +887,6 @@ def iter_media_files(
             if media_kind is None:
                 continue
             media_files.append((file_path, media_kind))
-
-            if should_report_discovery_progress(
-                visited_dir_count=visited_dir_count,
-                inspected_file_count=inspected_file_count,
-            ):
-                print_discovery_progress(
-                    visited_dir_count=visited_dir_count,
-                    inspected_file_count=inspected_file_count,
-                    media_candidate_count=len(media_files),
-                    current_dir=root_path,
-                    target_dir=target_dir,
-                )
 
     print(
         "[预扫描完成] "
