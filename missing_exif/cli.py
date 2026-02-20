@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 import sys
+import time
 from typing import Sequence
 
 from .common import (
@@ -182,10 +183,63 @@ def run_write_command(args: argparse.Namespace) -> int:
         print("用户取消，未执行写入。")
         return 1
 
-    success_count, errors = process_plan(plan, args.write_progress_interval)
-    print(f"写入完成: 成功 {success_count}，失败 {len(errors)}")
-    print_error_summary("写回失败明细", errors)
-    if errors or parse_errors:
+    retry_until_success = args.retry_until_success
+    retry_interval_seconds = max(args.retry_interval_seconds, 0)
+    retry_max_rounds = max(args.retry_max_rounds, 0)
+
+    round_number = 1
+    total_success_count = 0
+    remaining_plan = list(plan)
+    last_errors: list[str] = []
+
+    while remaining_plan:
+        if round_number == 1:
+            print(f"开始写回，共 {len(remaining_plan)} 个文件。")
+        else:
+            print(
+                f"开始第 {round_number} 轮重试，待处理 {len(remaining_plan)} 个文件。"
+            )
+
+        success_count, failed_items, errors = process_plan(
+            remaining_plan,
+            args.write_progress_interval,
+        )
+        total_success_count += success_count
+        last_errors = errors
+
+        if not failed_items:
+            break
+
+        print_error_summary(f"第 {round_number} 轮失败明细", errors)
+
+        if not retry_until_success:
+            print(
+                f"写入完成: 成功 {total_success_count}，失败 {len(failed_items)}"
+            )
+            return 2
+
+        if retry_max_rounds > 0 and round_number >= retry_max_rounds:
+            print(
+                f"达到最大重试轮次 {retry_max_rounds}，"
+                f"仍有 {len(failed_items)} 个文件失败。"
+            )
+            print_error_summary("最终失败明细", errors)
+            return 2
+
+        print(
+            f"第 {round_number} 轮后剩余失败 {len(failed_items)} 个，"
+            f"{retry_interval_seconds} 秒后重试。"
+        )
+        remaining_plan = failed_items
+        round_number += 1
+        if retry_interval_seconds > 0:
+            time.sleep(retry_interval_seconds)
+
+    print(f"写入完成: 成功 {total_success_count}，失败 0")
+    if parse_errors:
+        return 2
+    if last_errors:
+        print_error_summary("写回失败明细", last_errors)
         return 2
     return 0
 
@@ -257,6 +311,9 @@ def run_pipeline_command(args: argparse.Namespace) -> int:
         dry_run=args.dry_run,
         yes=args.yes,
         write_progress_interval=args.write_progress_interval,
+        retry_until_success=args.retry_until_success,
+        retry_interval_seconds=args.retry_interval_seconds,
+        retry_max_rounds=args.retry_max_rounds,
     )
     write_code = run_write_command(write_args)
 
@@ -406,6 +463,26 @@ def add_common_execution_args(parser: argparse.ArgumentParser) -> None:
         type=int,
         default=20,
         help="写回阶段每处理多少个文件输出一次进度，默认 20。",
+    )
+    parser.add_argument(
+        "--retry-until-success",
+        action="store_true",
+        help=(
+            "写回失败后自动按失败项重试，直到全部成功。"
+            "可配合 --retry-max-rounds 限制轮次。"
+        ),
+    )
+    parser.add_argument(
+        "--retry-interval-seconds",
+        type=int,
+        default=10,
+        help="写回重试间隔秒数，默认 10。",
+    )
+    parser.add_argument(
+        "--retry-max-rounds",
+        type=int,
+        default=0,
+        help="写回最大重试轮次，0 表示不限制。",
     )
 
 

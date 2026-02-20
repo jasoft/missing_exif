@@ -74,6 +74,14 @@ python fill_missing_exif.py write P:\ \
   -y
 ```
 
+按 plan 持续重试直到全部成功（适合网络盘偶发权限冲突）：
+
+```bash
+python fill_missing_exif.py write P:\ \
+  --input P:\photo_backup\.missing_exif_state\plan.jsonl \
+  -y --retry-until-success --retry-interval-seconds 10
+```
+
 ## Pipe 串联用法
 
 可以直接通过标准输入/输出串联三个阶段：
@@ -139,6 +147,10 @@ docker logs -f missing-exif-job
 - `--exclude-dir`：按目录名排除，支持重复传入和逗号分隔。
 - `--scan-workers`：筛选阶段并发线程数。
 - `--progress-interval`：筛选阶段进度输出间隔。
+- `--write-progress-interval`：写回阶段进度输出间隔。
+- `--retry-until-success`：写回失败后按失败项持续重试，直到全部成功。
+- `--retry-interval-seconds`：重试间隔秒数，默认 10。
+- `--retry-max-rounds`：最大重试轮次，0 表示不限制。
 - `--dry-run`：只预览，不执行写回。
 - `-y` / `--yes`：跳过写回确认。
 - `--refresh-discover`：强制重跑预扫描阶段。

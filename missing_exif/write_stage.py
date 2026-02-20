@@ -116,6 +116,23 @@ def backup_file(file_path: Path, backup_path: Path) -> Path:
     return actual_backup
 
 
+def restore_from_backup(backup_path: Path, file_path: Path) -> str | None:
+    """尝试从备份恢复原文件。
+
+    Args:
+        backup_path: 备份文件路径。
+        file_path: 目标恢复路径。
+
+    Returns:
+        str | None: 失败时返回错误描述，成功返回 None。
+    """
+    try:
+        shutil.copy2(backup_path, file_path)
+    except Exception as exc:  # noqa: BLE001
+        return f"回滚失败: {exc}"
+    return None
+
+
 def write_capture_time(
     file_path: Path,
     media_kind: MediaKind,
@@ -164,7 +181,7 @@ def write_capture_time(
 def process_plan(
     plan: Sequence[PlanItem],
     progress_interval: int,
-) -> tuple[int, list[str]]:
+) -> tuple[int, list[PlanItem], list[str]]:
     """执行备份与写入，并在失败时回滚。
 
     Args:
@@ -172,9 +189,10 @@ def process_plan(
         progress_interval: 进度输出间隔。
 
     Returns:
-        tuple[int, list[str]]: 成功数量与失败列表。
+        tuple[int, list[PlanItem], list[str]]: 成功数量、失败项列表与失败信息列表。
     """
     success_count = 0
+    failed_items: list[PlanItem] = []
     errors: list[str] = []
     total = len(plan)
     interval = max(progress_interval, 1)
@@ -191,9 +209,16 @@ def process_plan(
             )
             success_count += 1
         except Exception as exc:  # noqa: BLE001
+            error_message = f"{item.file_path}: {exc}"
             if rollback_from and rollback_from.exists():
-                shutil.copy2(rollback_from, item.file_path)
-            errors.append(f"{item.file_path}: {exc}")
+                rollback_error = restore_from_backup(
+                    backup_path=rollback_from,
+                    file_path=item.file_path,
+                )
+                if rollback_error:
+                    error_message = f"{error_message} | {rollback_error}"
+            failed_items.append(item)
+            errors.append(error_message)
 
         if index == 1 or index == total or index % interval == 0:
             percent = (index / total) * 100
@@ -204,4 +229,4 @@ def process_plan(
                 f"失败: {len(errors)}"
             )
 
-    return success_count, errors
+    return success_count, failed_items, errors
