@@ -1,8 +1,12 @@
 # missing_exif
 
 扫描目录中的图片和视频文件（包含 HEIF/HEIC），当文件缺失拍摄时间元数据时，将文件系统“最后修改时间”写入元数据。
-脚本会递归扫描子目录，并跟随目录软链接进行处理。
-扫描阶段会持续写入计划 JSON，支持断点续扫与从计划文件直接执行。
+
+特性：
+- 递归扫描并跟随目录软链接。
+- 扫描阶段实时输出进度（包含“预扫描进度”和“扫描进度”）。
+- 自动断点续扫：已扫描且未变化文件会跳过，不需要手动指定 JSON。
+- 写入前自动备份原文件，失败自动回滚。
 
 脚本文件：`fill_missing_exif.py`
 
@@ -26,7 +30,6 @@ docker run --rm -it \
   -v /volume1/photo_backup:/backup \
   missing-exif:latest \
   /data --dry-run --backup-dir /backup --progress-interval 20 \
-  --plan-file /backup/scan_plan.json \
   --exclude-dir "#recycle" --exclude-dir ".thumb"
 ```
 
@@ -39,22 +42,8 @@ docker run --rm -it \
   -v /volume1:/volume1 \
   -v /volume1/photo_backup:/backup \
   missing-exif:latest \
-  /data --backup-dir /backup --progress-interval 20 \
-  --plan-file /backup/scan_plan.json \
+  /data --backup-dir /backup --progress-interval 20 -y \
   --exclude-dir "#recycle,.thumb"
-```
-
-如果你不想交互确认，可加 `-y`：
-
-```bash
-docker run --rm -it \
-  -e TZ=Asia/Shanghai \
-  -v /volume1/photo:/data \
-  -v /volume1:/volume1 \
-  -v /volume1/photo_backup:/backup \
-  missing-exif:latest \
-  /data --backup-dir /backup -y --progress-interval 20 \
-  --plan-file /backup/scan_plan.json
 ```
 
 ### 4. 后台运行（长任务推荐）
@@ -72,7 +61,6 @@ nohup docker run --rm \
   -v /volume1/photo_backup:/backup \
   missing-exif:latest \
   /data --backup-dir /backup --progress-interval 20 -y \
-  --plan-file /backup/scan_plan.json \
   --exclude-dir "#recycle,.thumb" \
   > /volume1/photo_backup/missing-exif.log 2>&1 &
 ```
@@ -93,7 +81,6 @@ docker run -d --name missing-exif-job \
   -v /volume1/photo_backup:/backup \
   missing-exif:latest \
   /data --backup-dir /backup --progress-interval 20 -y \
-  --plan-file /backup/scan_plan.json \
   --exclude-dir "#recycle,.thumb"
 ```
 
@@ -103,36 +90,12 @@ docker run -d --name missing-exif-job \
 docker logs -f missing-exif-job
 ```
 
-### 5. 断点续扫与从计划执行
+## 断点续扫说明
 
-扫描会持续写入 `--plan-file`。中断后重新运行同一命令，会自动跳过“已扫描且文件未变化”的文件。
+脚本会在备份目录下自动维护隐藏状态文件（`/backup/.missing_exif_state/`），用于断点续扫。  
+这些文件对使用者透明，不需要在命令行传任何额外参数。
 
-仅重跑扫描（使用已有进度）：
-
-```bash
-docker run --rm -it \
-  -e TZ=Asia/Shanghai \
-  -v /volume1/photo:/data \
-  -v /volume1:/volume1 \
-  -v /volume1/photo_backup:/backup \
-  missing-exif:latest \
-  /data --dry-run --backup-dir /backup --progress-interval 20 \
-  --plan-file /backup/scan_plan.json
-```
-
-从计划文件直接执行写入（跳过扫描）：
-
-```bash
-docker run --rm -it \
-  -e TZ=Asia/Shanghai \
-  -v /volume1/photo:/data \
-  -v /volume1:/volume1 \
-  -v /volume1/photo_backup:/backup \
-  missing-exif:latest \
-  --from-plan /backup/scan_plan.json -y
-```
-
-如果需要丢弃旧进度并重新扫描，可加 `--reset-plan`。
+中断后只需重新执行同一条命令，脚本会自动跳过已扫描且未变化的文件。
 
 ## 参数说明
 
@@ -142,8 +105,4 @@ docker run --rm -it \
 - `--progress-interval`：扫描阶段进度输出间隔（默认每 50 个媒体文件输出一次）
 - `--exclude-dir`：按目录名排除扫描，支持重复传入和逗号分隔
 - `--scan-workers`：扫描阶段并发线程数（默认自动计算）
-- `--plan-file`：计划 JSON 路径，扫描时持续写入（用于断点续扫）
-- `--plan-flush-interval`：计划 JSON 刷盘间隔（按处理文件数量）
-- `--from-plan`：从计划 JSON 直接读取待处理项并执行（跳过扫描）
-- `--reset-plan`：重置已有计划文件，不使用历史扫描进度
 - `-y` / `--yes`：跳过交互确认，直接执行写入

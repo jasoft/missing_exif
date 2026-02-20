@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+import hashlib
 import json
 import os
 import shutil
@@ -28,6 +29,10 @@ PlanItem = tuple[Path, MediaKind, str, str, Path]
 ScanResult = tuple[Path, PlanItem | None, str | None]
 
 DEFAULT_SCAN_WORKERS = max(4, min(32, (os.cpu_count() or 4) * 2))
+DEFAULT_PLAN_FLUSH_INTERVAL = 200
+STATE_DIR_NAME = ".missing_exif_state"
+DISCOVERY_FILE_PROGRESS_INTERVAL = 1000
+DISCOVERY_DIR_PROGRESS_INTERVAL = 300
 
 IMAGE_EXTENSIONS = {
     ".avif",
@@ -82,12 +87,7 @@ def parse_args() -> argparse.Namespace:
             "的文件写入最后修改时间。"
         )
     )
-    parser.add_argument(
-        "target_dir",
-        type=Path,
-        nargs="?",
-        help="要扫描的目录路径。使用 --from-plan 时可省略。",
-    )
+    parser.add_argument("target_dir", type=Path, help="要扫描的目录路径。")
     parser.add_argument(
         "--backup-dir",
         type=Path,
@@ -126,31 +126,6 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=DEFAULT_SCAN_WORKERS,
         help=f"扫描阶段并发线程数，默认 {DEFAULT_SCAN_WORKERS}。",
-    )
-    parser.add_argument(
-        "--plan-file",
-        type=Path,
-        default=Path("scan_plan.json"),
-        help=(
-            "扫描计划 JSON 文件路径。扫描阶段会持续写入进度，"
-            "用于中断恢复和后续直接执行。"
-        ),
-    )
-    parser.add_argument(
-        "--plan-flush-interval",
-        type=int,
-        default=200,
-        help="计划文件刷盘间隔（处理文件数量），默认 200。",
-    )
-    parser.add_argument(
-        "--from-plan",
-        type=Path,
-        help="从计划 JSON 文件读取待处理项，跳过扫描并直接执行写入。",
-    )
-    parser.add_argument(
-        "--reset-plan",
-        action="store_true",
-        help="扫描前重置已有计划文件，不使用断点续扫数据。",
     )
     return parser.parse_args()
 
@@ -210,6 +185,24 @@ def resolve_backup_dir(target_dir: Path, backup_dir: Path) -> Path:
     if backup_dir.is_absolute():
         return backup_dir
     return target_dir / backup_dir
+
+
+def resolve_state_plan_file(target_dir: Path, backup_dir: Path) -> Path:
+    """生成自动管理的计划文件路径。
+
+    Args:
+        target_dir: 扫描根目录。
+        backup_dir: 备份目录。
+
+    Returns:
+        Path: 计划文件路径。
+    """
+    target_hash = hashlib.sha1(
+        str(target_dir).encode("utf-8"),
+        usedforsecurity=False,
+    ).hexdigest()[:16]
+    state_dir = backup_dir / STATE_DIR_NAME
+    return state_dir / f"scan_state_{target_hash}.json"
 
 
 def normalize_excluded_dir_names(raw_values: Sequence[str]) -> set[str]:
@@ -786,6 +779,58 @@ def should_skip_media_file(
     return is_file_in_excluded_dirs(file_path, target_dir, excluded_dir_names)
 
 
+def should_report_discovery_progress(
+    visited_dir_count: int,
+    inspected_file_count: int,
+) -> bool:
+    """判断是否应输出预扫描进度。
+
+    Args:
+        visited_dir_count: 已遍历目录数。
+        inspected_file_count: 已检查文件数。
+
+    Returns:
+        bool: True 表示应输出进度。
+    """
+    if visited_dir_count == 1:
+        return True
+
+    if visited_dir_count % DISCOVERY_DIR_PROGRESS_INTERVAL == 0:
+        return True
+
+    if inspected_file_count % DISCOVERY_FILE_PROGRESS_INTERVAL == 0:
+        return True
+
+    return False
+
+
+def print_discovery_progress(
+    visited_dir_count: int,
+    inspected_file_count: int,
+    media_candidate_count: int,
+    current_dir: Path,
+    target_dir: Path,
+) -> None:
+    """输出预扫描进度。
+
+    Args:
+        visited_dir_count: 已遍历目录数。
+        inspected_file_count: 已检查文件数。
+        media_candidate_count: 已发现媒体候选数量。
+        current_dir: 当前目录。
+        target_dir: 扫描根目录。
+    """
+    relative_dir = safe_relative_path(current_dir, target_dir)
+    print(
+        "[预扫描进度] "
+        f"目录: {visited_dir_count} | "
+        f"文件: {inspected_file_count} | "
+        f"媒体候选: {media_candidate_count} | "
+        f"当前目录: {relative_dir}",
+        flush=True,
+    )
+
+
 def detect_media_kind(file_path: Path) -> MediaKind | None:
     """根据扩展名识别媒体类型。
 
@@ -820,15 +865,30 @@ def iter_media_files(
     """
     media_files: list[tuple[Path, MediaKind]] = []
     visited_real_dirs: set[str] = set()
+    visited_dir_count = 0
+    inspected_file_count = 0
 
     for root_dir, dir_names, file_names in os.walk(target_dir, followlinks=True):
         root_path = Path(root_dir)
+        visited_dir_count += 1
         root_real_path = safe_resolve_path(root_path)
         root_real_key = str(root_real_path)
         if root_real_key in visited_real_dirs:
             dir_names[:] = []
             continue
         visited_real_dirs.add(root_real_key)
+
+        if should_report_discovery_progress(
+            visited_dir_count=visited_dir_count,
+            inspected_file_count=inspected_file_count,
+        ):
+            print_discovery_progress(
+                visited_dir_count=visited_dir_count,
+                inspected_file_count=inspected_file_count,
+                media_candidate_count=len(media_files),
+                current_dir=root_path,
+                target_dir=target_dir,
+            )
 
         filtered_dir_names: list[str] = []
         for dir_name in dir_names:
@@ -845,6 +905,7 @@ def iter_media_files(
 
         for file_name in file_names:
             file_path = root_path / file_name
+            inspected_file_count += 1
             if should_skip_media_file(
                 file_path=file_path,
                 target_dir=target_dir,
@@ -857,6 +918,26 @@ def iter_media_files(
             if media_kind is None:
                 continue
             media_files.append((file_path, media_kind))
+
+            if should_report_discovery_progress(
+                visited_dir_count=visited_dir_count,
+                inspected_file_count=inspected_file_count,
+            ):
+                print_discovery_progress(
+                    visited_dir_count=visited_dir_count,
+                    inspected_file_count=inspected_file_count,
+                    media_candidate_count=len(media_files),
+                    current_dir=root_path,
+                    target_dir=target_dir,
+                )
+
+    print(
+        "[预扫描完成] "
+        f"目录: {visited_dir_count} | "
+        f"文件: {inspected_file_count} | "
+        f"媒体候选: {len(media_files)}",
+        flush=True,
+    )
     return media_files
 
 
@@ -1495,83 +1576,60 @@ def main() -> int:
         int: 进程退出码。0 表示成功，非 0 表示失败或取消。
     """
     args = parse_args()
+    target_dir = args.target_dir.resolve()
+    backup_dir = resolve_backup_dir(target_dir, args.backup_dir).resolve()
+    excluded_dir_names = normalize_excluded_dir_names(args.exclude_dir)
+    plan_file = resolve_state_plan_file(target_dir, backup_dir)
+
+    if not target_dir.exists() or not target_dir.is_dir():
+        print(f"目标目录不存在或不是目录: {target_dir}", file=sys.stderr)
+        return 2
+
     try:
         ensure_exiftool_available()
     except Exception as exc:  # noqa: BLE001
         print(f"初始化失败: {exc}", file=sys.stderr)
         return 2
 
-    if args.from_plan is not None:
-        plan_file = args.from_plan.resolve()
-        try:
-            plan, planned_target_dir = load_plan_items_from_file(plan_file)
-        except Exception as exc:  # noqa: BLE001
-            print(f"读取计划文件失败: {exc}", file=sys.stderr)
-            return 2
+    try:
+        plan_store = ScanPlanStore(
+            plan_file=plan_file,
+            flush_interval=DEFAULT_PLAN_FLUSH_INTERVAL,
+            reset_plan=False,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"初始化扫描状态失败: {exc}", file=sys.stderr)
+        return 2
 
-        if args.target_dir is not None:
-            target_dir = args.target_dir.resolve()
-        elif planned_target_dir is not None:
-            target_dir = planned_target_dir
-        else:
-            target_dir = Path.cwd()
+    print(f"开始扫描目录: {target_dir}", flush=True)
+    print("已启用自动断点续扫：已扫描且未变化的文件将被跳过。")
 
-        print(f"从计划文件读取: {plan_file}")
-        print(f"计划文件包含待处理项: {len(plan)}")
-    else:
-        if args.target_dir is None:
-            print(
-                "缺少 target_dir。扫描模式必须提供目录路径，"
-                "或使用 --from-plan。",
-                file=sys.stderr,
-            )
-            return 2
+    try:
+        plan, scan_errors = build_modification_plan(
+            target_dir=target_dir,
+            backup_dir=backup_dir,
+            progress_interval=args.progress_interval,
+            excluded_dir_names=excluded_dir_names,
+            scan_workers=args.scan_workers,
+            plan_store=plan_store,
+        )
+        plan_store.set_status("scan_completed")
+        plan_store.flush(force=True)
+    except KeyboardInterrupt:
+        plan_store.set_status("scan_interrupted")
+        plan_store.flush(force=True)
+        print("扫描被中断，进度已保存。")
+        plan = plan_store.get_plan_items()
+        scan_errors = []
+    except Exception as exc:  # noqa: BLE001
+        plan_store.record_fatal_error(str(exc))
+        plan_store.set_status("scan_failed")
+        plan_store.flush(force=True)
+        print(f"扫描阶段发生未处理异常: {exc}", file=sys.stderr)
+        plan = plan_store.get_plan_items()
+        scan_errors = [f"扫描阶段发生未处理异常: {exc}"]
 
-        target_dir = args.target_dir.resolve()
-        if not target_dir.exists() or not target_dir.is_dir():
-            print(f"目标目录不存在或不是目录: {target_dir}", file=sys.stderr)
-            return 2
-
-        backup_dir = resolve_backup_dir(target_dir, args.backup_dir).resolve()
-        excluded_dir_names = normalize_excluded_dir_names(args.exclude_dir)
-        plan_file = args.plan_file.resolve()
-
-        try:
-            plan_store = ScanPlanStore(
-                plan_file=plan_file,
-                flush_interval=args.plan_flush_interval,
-                reset_plan=args.reset_plan,
-            )
-        except Exception as exc:  # noqa: BLE001
-            print(f"初始化计划存储失败: {exc}", file=sys.stderr)
-            return 2
-
-        print(f"开始扫描目录: {target_dir}", flush=True)
-        print(f"计划文件: {plan_file}", flush=True)
-        if plan_file.exists() and not args.reset_plan:
-            print("已启用断点续扫：已扫描且未变化的文件将被跳过。")
-
-        try:
-            plan, scan_errors = build_modification_plan(
-                target_dir=target_dir,
-                backup_dir=backup_dir,
-                progress_interval=args.progress_interval,
-                excluded_dir_names=excluded_dir_names,
-                scan_workers=args.scan_workers,
-                plan_store=plan_store,
-            )
-            plan_store.set_status("scan_completed")
-            plan_store.flush(force=True)
-        except Exception as exc:  # noqa: BLE001
-            plan_store.record_fatal_error(str(exc))
-            plan_store.set_status("scan_failed")
-            plan_store.flush(force=True)
-            print(f"扫描阶段发生未处理异常: {exc}", file=sys.stderr)
-            plan = plan_store.get_plan_items()
-            scan_errors = [f"扫描阶段发生未处理异常: {exc}"]
-
-        print_error_summary("扫描阶段错误（已跳过）", scan_errors)
-        print(f"扫描计划已写入: {plan_file}")
+    print_error_summary("扫描阶段错误（已跳过）", scan_errors)
 
     print_plan(plan, target_dir)
     if not plan:
