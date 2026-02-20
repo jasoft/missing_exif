@@ -14,17 +14,21 @@
 
 项目已提供 `Dockerfile`，容器内会安装 `exiftool`，适合主机未安装 exiftool 但可运行 Docker 的场景。
 
-### 1. 构建镜像
+### 1. 构建镜像（仅首次或依赖变更时）
 
 ```bash
 docker build -t missing-exif:latest .
 ```
+
+该镜像主要提供 `python + exiftool` 运行环境。  
+后续如果只修改 `fill_missing_exif.py`，不需要重新 build；运行时把项目目录挂载到容器 `/workspace`，容器会优先执行挂载目录中的脚本。
 
 ### 2. Dry Run（只预览不写入）
 
 ```bash
 docker run --rm -it \
   -e TZ=Asia/Shanghai \
+  -v $(pwd):/workspace:ro \
   -v /volume1/photo:/data \
   -v /volume1:/volume1:ro \
   -v /volume1/photo_backup:/backup \
@@ -38,6 +42,7 @@ docker run --rm -it \
 ```bash
 docker run --rm -it \
   -e TZ=Asia/Shanghai \
+  -v $(pwd):/workspace:ro \
   -v /volume1/photo:/data \
   -v /volume1:/volume1 \
   -v /volume1/photo_backup:/backup \
@@ -56,6 +61,7 @@ docker run --rm -it \
 ```bash
 nohup docker run --rm \
   -e TZ=Asia/Shanghai \
+  -v /volume1/docker/missing_exif:/workspace:ro \
   -v /volume1/photo:/data \
   -v /volume1:/volume1 \
   -v /volume1/photo_backup:/backup \
@@ -76,6 +82,7 @@ tail -f /volume1/photo_backup/missing-exif.log
 ```bash
 docker run -d --name missing-exif-job \
   -e TZ=Asia/Shanghai \
+  -v /volume1/docker/missing_exif:/workspace:ro \
   -v /volume1/photo:/data \
   -v /volume1:/volume1 \
   -v /volume1/photo_backup:/backup \

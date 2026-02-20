@@ -13,6 +13,13 @@ RUN apt-get update \
 WORKDIR /app
 
 COPY fill_missing_exif.py /app/fill_missing_exif.py
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
-ENTRYPOINT ["python", "/app/fill_missing_exif.py"]
+RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh \
+    && chmod +x /usr/local/bin/docker-entrypoint.sh \
+    && mkdir -p /workspace
+
+WORKDIR /workspace
+
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["--help"]
