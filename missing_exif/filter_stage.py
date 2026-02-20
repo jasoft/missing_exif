@@ -147,22 +147,6 @@ def load_discover_items(input_path: str) -> tuple[list[DiscoverItem], list[str]]
     return items, errors
 
 
-def should_report_progress(index: int, total: int, interval: int) -> bool:
-    """判断是否应输出筛选进度。
-
-    Args:
-        index: 当前处理序号（从 1 开始）。
-        total: 总数。
-        interval: 进度间隔。
-
-    Returns:
-        bool: 需要输出返回 True。
-    """
-    if total <= 0:
-        return False
-    return index == 1 or index == total or index % interval == 0
-
-
 def refill_tasks(
     executor: ThreadPoolExecutor,
     future_map: dict[Future[FilterResult], DiscoverItem],
@@ -188,20 +172,16 @@ def refill_tasks(
 def filter_discover_to_plan_jsonl(
     input_path: str,
     output_path: str,
-    target_dir: Path,
     backup_dir: Path,
     worker_count: int,
-    progress_interval: int,
 ) -> tuple[int, int, list[str]]:
     """执行筛选阶段，并输出待写回计划。
 
     Args:
         input_path: 预扫描结果 JSONL 输入路径。
         output_path: 待写回计划 JSONL 输出路径。
-        target_dir: 扫描根目录。
         backup_dir: 备份目录。
         worker_count: 并发线程数。
-        progress_interval: 进度输出间隔。
 
     Returns:
         tuple[int, int, list[str]]: (已处理总数, 待写回数量, 错误列表)。
@@ -222,7 +202,6 @@ def filter_discover_to_plan_jsonl(
     pending_items.reverse()
     effective_workers = max(worker_count, 1)
     inflight_limit = max(effective_workers * 4, 1)
-    effective_interval = max(progress_interval, 1)
 
     processed_count = 0
     pending_count = 0
@@ -261,21 +240,18 @@ def filter_discover_to_plan_jsonl(
                         write_jsonl_payload(writer, plan_item.to_dict())
                         pending_count += 1
 
-                    if processed_count % 200 == 0:
-                        writer.flush()
+                    writer.flush()
 
-                    if should_report_progress(
-                        processed_count,
-                        total_items,
-                        effective_interval,
-                    ):
-                        percent = (processed_count / total_items) * 100
-                        log_info(
-                            "[筛选进度] "
-                            f"{processed_count}/{total_items} ({percent:.1f}%) | "
-                            f"当前: {checked_item.relative_path} | "
-                            f"待写回: {pending_count}"
-                        )
+                    result_text = "待写回" if plan_item is not None else "已跳过(已有元数据)"
+                    if error_message:
+                        result_text = f"失败: {error_message}"
+                    log_info(
+                        "[筛选结果] "
+                        f"{processed_count}/{total_items} | "
+                        f"文件: {checked_item.relative_path} | "
+                        f"结果: {result_text} | "
+                        f"待写回: {pending_count}"
+                    )
 
                 refill_tasks(
                     executor=executor,

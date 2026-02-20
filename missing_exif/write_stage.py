@@ -180,13 +180,11 @@ def write_capture_time(
 
 def process_plan(
     plan: Sequence[PlanItem],
-    progress_interval: int,
 ) -> tuple[int, list[PlanItem], list[str]]:
     """执行备份与写入，并在失败时回滚。
 
     Args:
         plan: 待处理清单。
-        progress_interval: 进度输出间隔。
 
     Returns:
         tuple[int, list[PlanItem], list[str]]: 成功数量、失败项列表与失败信息列表。
@@ -195,10 +193,10 @@ def process_plan(
     failed_items: list[PlanItem] = []
     errors: list[str] = []
     total = len(plan)
-    interval = max(progress_interval, 1)
 
     for index, item in enumerate(plan, start=1):
         rollback_from: Path | None = None
+        result_text = "成功"
         try:
             rollback_from = backup_file(item.file_path, item.backup_path)
             write_capture_time(
@@ -219,14 +217,15 @@ def process_plan(
                     error_message = f"{error_message} | {rollback_error}"
             failed_items.append(item)
             errors.append(error_message)
+            result_text = f"失败: {error_message}"
 
-        if index == 1 or index == total or index % interval == 0:
-            percent = (index / total) * 100
-            print(
-                "[写回进度] "
-                f"{index}/{total} ({percent:.1f}%) | "
-                f"成功: {success_count} | "
-                f"失败: {len(errors)}"
-            )
+        print(
+            "[写回结果] "
+            f"{index}/{total} | "
+            f"文件: {item.relative_path} | "
+            f"结果: {result_text} | "
+            f"累计成功: {success_count} | "
+            f"累计失败: {len(errors)}"
+        )
 
     return success_count, failed_items, errors

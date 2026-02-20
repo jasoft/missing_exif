@@ -8,6 +8,7 @@
 - 支持目录排除（如 `#recycle`、`.thumb`、`@eaDir`）。
 - 三阶段流水线：`预扫描 -> 筛选 -> 写回`。
 - 每个阶段都可输出/复用 JSONL 中间产物，避免重复扫描。
+- 筛选/写回阶段按“每条记录”输出处理结果，不再按间隔节流。
 - 写回前输出待修改清单，支持 `--dry-run`。
 - 写入前自动备份原文件，失败时自动回滚。
 - 修复 Windows 多线程场景下 `gbk` 解码崩溃（统一按字节读取并安全解码）。
@@ -19,7 +20,7 @@
 以下命令等价于执行完整流水线：
 
 ```bash
-python fill_missing_exif.py P:\ --dry-run --backup-dir P:\photo_backup --progress-interval 50
+python fill_missing_exif.py P:\ --dry-run --backup-dir P:\photo_backup
 ```
 
 说明：
@@ -53,7 +54,7 @@ python fill_missing_exif.py discover P:\ --backup-dir P:\photo_backup \
 python fill_missing_exif.py filter P:\ --backup-dir P:\photo_backup \
   --input P:\photo_backup\.missing_exif_state\discover.jsonl \
   --output P:\photo_backup\.missing_exif_state\plan.jsonl \
-  --scan-workers 32 --progress-interval 50
+  --scan-workers 32
 ```
 
 ### 3) 写回阶段（write）
@@ -115,7 +116,7 @@ docker run --rm -it \
   -v /volume1/PhotoHomes:/data \
   -v /volume1/PhotoHomes/photo_backup:/backup \
   missing-exif:latest \
-  /data --dry-run --backup-dir /backup --progress-interval 50 \
+  /data --dry-run --backup-dir /backup \
   --exclude-dir "#recycle,.thumb,@eaDir,photo_backup"
 ```
 
@@ -130,7 +131,7 @@ docker run -d --name missing-exif-job \
   -v /volume1/PhotoHomes:/data \
   -v /volume1/PhotoHomes/photo_backup:/backup \
   missing-exif:latest \
-  /data --backup-dir /backup --progress-interval 50 -y \
+  /data --backup-dir /backup -y \
   --exclude-dir "#recycle,.thumb,@eaDir,photo_backup"
 ```
 
@@ -146,8 +147,6 @@ docker logs -f missing-exif-job
 - `--backup-dir`：备份目录（相对路径会拼接到 `target_dir` 下）。
 - `--exclude-dir`：按目录名排除，支持重复传入和逗号分隔。
 - `--scan-workers`：筛选阶段并发线程数。
-- `--progress-interval`：筛选阶段进度输出间隔。
-- `--write-progress-interval`：写回阶段进度输出间隔。
 - `--retry-until-success`：写回失败后按失败项持续重试，直到全部成功。
 - `--retry-interval-seconds`：重试间隔秒数，默认 10。
 - `--retry-max-rounds`：最大重试轮次，0 表示不限制。

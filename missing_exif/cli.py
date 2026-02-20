@@ -120,7 +120,7 @@ def run_filter_command(args: argparse.Namespace) -> int:
         int: 退出码。
     """
     try:
-        target_dir, backup_dir = parse_common_target_and_backup(
+        _, backup_dir = parse_common_target_and_backup(
             args.target_dir,
             args.backup_dir,
         )
@@ -137,10 +137,8 @@ def run_filter_command(args: argparse.Namespace) -> int:
     processed_count, pending_count, errors = filter_discover_to_plan_jsonl(
         input_path=args.input,
         output_path=args.output,
-        target_dir=target_dir,
         backup_dir=backup_dir,
         worker_count=args.scan_workers,
-        progress_interval=args.progress_interval,
     )
     print_error_summary("筛选阶段错误（已跳过）", errors, to_stderr=True)
     log_info(f"筛选结果: 已处理 {processed_count}，待写回 {pending_count}")
@@ -202,7 +200,6 @@ def run_write_command(args: argparse.Namespace) -> int:
 
         success_count, failed_items, errors = process_plan(
             remaining_plan,
-            args.write_progress_interval,
         )
         total_success_count += success_count
         last_errors = errors
@@ -298,10 +295,8 @@ def run_pipeline_command(args: argparse.Namespace) -> int:
         _, _, filter_errors = filter_discover_to_plan_jsonl(
             input_path=str(discover_file),
             output_path=str(plan_file),
-            target_dir=target_dir,
             backup_dir=backup_dir,
             worker_count=args.scan_workers,
-            progress_interval=args.progress_interval,
         )
         print_error_summary("筛选阶段错误（已跳过）", filter_errors)
 
@@ -310,7 +305,6 @@ def run_pipeline_command(args: argparse.Namespace) -> int:
         input=str(plan_file),
         dry_run=args.dry_run,
         yes=args.yes,
-        write_progress_interval=args.write_progress_interval,
         retry_until_success=args.retry_until_success,
         retry_interval_seconds=args.retry_interval_seconds,
         retry_max_rounds=args.retry_max_rounds,
@@ -412,8 +406,8 @@ def add_common_scan_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--progress-interval",
         type=int,
-        default=50,
-        help="筛选阶段每处理多少个文件输出一次进度，默认 50。",
+        default=0,
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--scan-workers",
@@ -461,8 +455,8 @@ def add_common_execution_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--write-progress-interval",
         type=int,
-        default=20,
-        help="写回阶段每处理多少个文件输出一次进度，默认 20。",
+        default=0,
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--retry-until-success",
