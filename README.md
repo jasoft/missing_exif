@@ -154,3 +154,25 @@ docker logs -f missing-exif-job
 - `-y` / `--yes`：跳过写回确认。
 - `--refresh-discover`：强制重跑预扫描阶段。
 - `--refresh-filter`：强制重跑筛选阶段。
+
+## Skill 安装
+
+本仓库包含可直接安装的 Skill：`skills/fill-missing-exif`。
+
+Linux/macOS:
+
+```bash
+python ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-github.py \
+  --repo jasoft/missing_exif \
+  --path skills/fill-missing-exif
+```
+
+Windows:
+
+```powershell
+python $env:USERPROFILE\.codex\skills\.system\skill-installer\scripts\install-skill-from-github.py `
+  --repo jasoft/missing_exif `
+  --path skills/fill-missing-exif
+```
+
+安装后重启 Codex 以加载新 Skill。

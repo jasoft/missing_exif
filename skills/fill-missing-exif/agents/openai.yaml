@@ -1,0 +1,4 @@
+interface:
+  display_name: "Fill Missing EXIF"
+  short_description: "Repair missing media capture metadata safely."
+  default_prompt: "Use $fill-missing-exif to discover media missing capture metadata and write mtime with backup safety."
